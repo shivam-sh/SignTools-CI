@@ -557,20 +557,6 @@ def dump_prov_entitlements(prov_file: Path) -> Dict[Any, Any]:
     return dump_prov(prov_file)["Entitlements"]
 
 
-def is_wildcard_app_id(app_id: str):
-    return app_id.endswith(".*")
-
-
-def wildcard_app_id_matches(wildcard_app_id: str, component_app_id: str):
-    return is_wildcard_app_id(wildcard_app_id) and component_app_id.startswith(wildcard_app_id[:-1])
-
-
-def expand_wildcard_identifier(identifier: str, component_app_id: str):
-    if wildcard_app_id_matches(identifier, component_app_id):
-        return component_app_id
-    return identifier
-
-
 def popen_check(pipe: Popen[bytes]):
     if pipe.returncode != 0:
         data = {"message": f"{pipe.args} failed with status code {pipe.returncode}"}
@@ -968,12 +954,10 @@ class Signer:
 
             prov_app_id = entitlements[self.__get_application_identifier_key()]
             component_app_id = f"{self.opts.team_id}.{bundle_id}"
+            wildcard_app_id = f"{self.opts.team_id}.*"
 
-            # If the provisioning profile has a wildcard app id, expand it to the
-            # concrete bundle being signed. This includes prefix wildcards like
-            # TEAMID.com.example.*; leaving those in signed entitlements breaks
-            # identity-sensitive routing such as Now Playing tap-to-open.
-            if wildcard_app_id_matches(prov_app_id, component_app_id):
+            # if the prov file has wildcard app id, expand it, or it would be invalid
+            if prov_app_id == wildcard_app_id:
                 entitlements[self.__get_application_identifier_key()] = component_app_id
             elif prov_app_id != component_app_id:
                 print(
@@ -987,19 +971,10 @@ class Signer:
             if old_keychain is None:
                 entitlements.pop("keychain-access-groups", None)
             # if the prov file has wildcard keychain group, expand it, or all signed apps will use the same keychain
-            elif keychain:
-                new_keychain = []
-                for item in keychain:
-                    expanded = expand_wildcard_identifier(item, component_app_id)
-                    if expanded != item:
-                        new_keychain.append(expanded)
-                    elif not item.startswith(self.opts.team_id + "."):
-                        new_keychain.append(item)
-                if not new_keychain:
-                    for item in old_keychain:
-                        suffix = item[item.index(".") + 1 :]
-                        new_keychain.append(f"{self.opts.team_id}.{suffix}")
-                entitlements["keychain-access-groups"] = new_keychain
+            elif keychain and any(item == wildcard_app_id for item in keychain):
+                keychain.clear()
+                for item in old_keychain:
+                    keychain.append(f"{self.opts.team_id}.{item[item.index('.')+1:]}")
         else:
             supported_entitlements = [
                 self.__get_application_identifier_key(),
